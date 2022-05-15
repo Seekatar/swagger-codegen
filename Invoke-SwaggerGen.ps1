@@ -70,11 +70,11 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
     return
 }
 
+$OASFile = Convert-Path $OASFile
 Push-Location $PSScriptRoot
 . ./formatters.ps1
 
 try {
-    $OASFile = Convert-Path $OASFile
 
     if (!(Get-Command java -ErrorAction Ignore)) {
         throw "Java not installed or in path"

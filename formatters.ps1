@@ -54,7 +54,7 @@ function Format-Model {
                     -replace "if \($($matches['name']) != null\)", ''
 
                 if ($count -gt 20) {
-                    Write-Error "Inifinite loop?"
+                    Write-Error "Infinite loop?"
                     break
                 }
             }
@@ -63,10 +63,10 @@ function Format-Model {
 
         Write-Verbose "Formatting $FileName"
 
-        $lines = Get-Content $FileName -ReadCount 0
         $content = ""
         $skipping = $false
         if ($NoToString) {
+            $lines = Get-Content $FileName -ReadCount 0
             foreach ($l in $lines) {
                 if ($l -like '*Returns the string presentation of the object*') {
                     $skipping = $true
@@ -76,6 +76,8 @@ function Format-Model {
                     $content += "$l`n"
                 }
             }
+        } else {
+            $content = Get-Content $FileName -Raw
         }
 
         if ($RemoveEnumSuffix) {
