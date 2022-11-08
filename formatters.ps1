@@ -5,7 +5,9 @@ function Format-Controller {
         [string] $FileName,
         [Parameter(Mandatory)]
         [string] $Namespace,
-        [string] $ControllerNamespace
+        [string] $ControllerNamespace,
+        [switch] $RenameController,
+        [switch] $NoValidateModel
     )
 
     process {
@@ -18,6 +20,13 @@ function Format-Controller {
 
         # format the generated a bit for System.Text.Json, warning fixes, etc.
         $c = Get-Content $FileName -raw
+        if ($RenameController -and ($FileName -match "(\w+)Api\.cs$")) {
+            $c = $c -replace "$($matches[1])Api", $matches[1]
+        }
+        if ($NoValidateModel) {
+            $c = $c -replace "\s+\[ValidateModelState\]", ""
+            $c = $c -replace "using IO\.Swagger\.Attributes;\s*`n", ""
+        }
         Set-Content ((((((
                             $c.Replace("using $Namespace;", "using $Namespace;`nusing System.Threading.Tasks;")) `
                             -replace ' exampleJson = null;\s+', ' ') `
@@ -84,27 +93,32 @@ function Format-Model {
             $content = $content -replace '(\[EnumMember\(Value = "\w+"\)\]\s+\w+)Enum( = \d+)', '$1$2'
         }
 
+        $content = $content -replace '( +)\[DataMember\(Name="(.*)"\)\]', ('$1[DataMember(Name="$2")]'+"`n"+'$1[JsonPropertyName("$2")]')
+
         if ($NoNullGuid) {
             $content = ($content `
                             -replace "public Guid? (\w*Id)", "public Guid `$1") `
                             -replace "if \(\w*Id != null\)", ""
         }
+        #  try remove trailing works in almost all cases $content = $content -replace "[\t ]+`n","`n"
 
         Set-Content (
             "#pragma warning disable CA1834 // Consider using 'StringBuilder.Append(char)' when applicable`n" +
+            "#pragma warning disable CA1307 // Specify StringComparison`n" +
             "// ReSharper disable RedundantUsingDirective`n" +
             "// ReSharper disable CheckNamespace`n" +
              ($(Repair-Null $content).Replace(`
                     'using Newtonsoft.Json;',
-                'using System.Text.Json;').Replace( `
+                    "using System.Text.Json;`nusing System.Text.Json.Serialization;").Replace( `
                     'return JsonConvert.SerializeObject(this, Formatting.Indented);', `
                     'return JsonSerializer.Serialize(this, new JsonSerializerOptions() { WriteIndented = true });').Replace(`
                     'namespace IO.Swagger.Models',
-                "namespace $Namespace").Replace(`
+                    "namespace $Namespace").Replace(`
                     '[JsonConverter(typeof(Newtonsoft.Json.Converters.StringEnumConverter))]',
                 ''
             ) -replace "^/\*", "#nullable disable`n/*") +
-            "`n#pragma warning restore CA1834 // Consider using 'StringBuilder.Append(char)' when applicable`n" )`
+            "`n#pragma warning restore CA1834 // Consider using 'StringBuilder.Append(char)' when applicable`n" +
+            "#pragma warning disable CA1307 // Specify StringComparison`n" )`
             -Path $FileName -Encoding ascii -NoNewline
     }
 }

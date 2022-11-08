@@ -29,6 +29,9 @@ Remove model's 'Enum' suffixes
 .PARAMETER NoToString
 Remove model ToString() methods since makes some debuggers show ugly output
 
+.PARAMETER NoValidateModel
+Do not include the [ValidateModel] attribute on the controller
+
 .PARAMETER Force
 Don't ask to wipe output folder
 
@@ -57,6 +60,7 @@ param(
     [switch] $RenameController,
     [switch] $RemoveEnumSuffix,
     [switch] $NoToString,
+    [switch] $NoValidateModel,
     [string] $JarVersion = "3.0.34",
     [switch] $Force
 )
@@ -122,7 +126,7 @@ try {
 
         Get-ChildItem (Join-Path $OutputFolder "src/IO.Swagger/Controllers" ) |
                 Select-Object -ExpandProperty fullname |
-                Format-Controller -Namespace $Namespace -ControllerNamespace $ControllerNamespace
+                Format-Controller -Namespace $Namespace -ControllerNamespace $ControllerNamespace -RenameController:$RenameController -NoValidateModel:$NoValidateModel
 
         if ($RenameController) {
             Get-ChildItem (Join-Path $OutputFolder "src/IO.Swagger/Controllers" ) |
