@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-Run swagger-gen on an OAS file
+Run swagger-gen or OpenAPI generator on an OAS file
 
 .DESCRIPTION
-Calls the swagger gen jar and formats the model and controller for newer .NET features.
+Calls the generator's jar and formats the model and controller for newer .NET features.
 
 .PARAMETER OASFile
 OASFile file
@@ -30,13 +30,22 @@ Remove model's 'Enum' suffixes
 Remove model ToString() methods since makes some debuggers show ugly output
 
 .PARAMETER NoValidateModel
-Do not include the [ValidateModel] attribute on the controller
+Do not include the [ValidateModel] attribute on the controller's methods
 
 .PARAMETER Force
 Don't ask to wipe output folder
 
 .PARAMETER JarVersion
-Download and run a different Jar than the 3.0.34 version
+Download and run a different Jar than default. 3.0.34 for SwaggerGen, 7.0.0 for OpenApi
+
+.PARAMETER SkipPostProcessing
+Skip post processing of the controller and model files
+
+.PARAMETER SkipConfig
+For OpenApi, skip using the aspnetcore-config.json file
+
+.PARAMETER Generator
+The generator to use, swaggergen or openapi (default swaggergen)
 
 .EXAMPLE
 ./Invoke-SwaggerGen.ps1 -OASFile ./oas.yaml -OutputFolder /temp/swagger-gen
@@ -46,6 +55,12 @@ Download and run a different Jar than the 3.0.34 version
 
 .NOTES
 Java must be in the path
+
+.LINK
+https://github.com/OpenAPITools/openapi-generator/tree/v7.0.0?tab=readme-ov-file
+
+.LINK
+https://github.com/swagger-api/swagger-codegen
 #>
 [CmdletBinding()]
 param(
@@ -61,8 +76,12 @@ param(
     [switch] $RemoveEnumSuffix,
     [switch] $NoToString,
     [switch] $NoValidateModel,
-    [string] $JarVersion = "3.0.34",
-    [switch] $Force
+    [string] $JarVersion,
+    [switch] $Force,
+    [switch] $SkipPostProcessing,
+    [switch] $SkipConfig,
+    [ValidateSet("swaggergen","openapi")]
+    [string] $Generator = "swaggergen"
 )
 
 Set-StrictMode -Version Latest
@@ -77,6 +96,8 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
 $OASFile = Convert-Path $OASFile
 Push-Location $PSScriptRoot
 . ./formatters.ps1
+
+"Generating $Generator from $OASFile to $OutputFolder"
 
 try {
 
@@ -94,15 +115,30 @@ try {
         }
     }
 
-    $jarPath = "swagger-codegen-cli-${JarVersion}.jar"
-    Write-Verbose "Checking $jarPath"
+    $params = @()
+    if ($Generator -eq "swaggergen") {
+        if (!$JarVersion) { $JarVersion = "3.0.34" }
+        $jarPath = "swagger-codegen-cli-${JarVersion}.jar"
+        $srcFolder = "IO.Swagger"
+        $params += "-l", "aspnetcore"
+        $url = "https://repo1.maven.org/maven2/io/swagger/codegen/v3/swagger-codegen-cli/$JarVersion/openapi-generator-cli-$JarVersion.jar"
+    } else {
+        if (!$JarVersion) { $JarVersion = "7.0.0" }
+        $jarPath = "openapi-generator-cli-${JarVersion}.jar"
+        $srcFolder = "Org.OpenAPITools"
+        $params += "-g", "aspnetcore"
+        $url = "https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/$JarVersion/openapi-generator-cli-$JarVersion.jar"
+    }
+    Write-Verbose "JarPath: $jarPath"
+    Write-Verbose "Url: $url"
+    Write-Verbose "Params: $($params -join ', ')"
 
     if (!(Test-Path $jarPath)) {
-        if ((Read-Host -Prompt "The swagger-gen jar file does not exist. Do you want to download it now (Y/n)?").StartsWith('n')) {
+        if ((Read-Host -Prompt "The jar file for $Generator does not exist. Do you want to download it now (Y/n)?").StartsWith('n')) {
             Write-Warning "You must download the jar file and put it in $PSScriptRoot"
             return
         } else {
-            Invoke-WebRequest "https://repo1.maven.org/maven2/io/swagger/codegen/v3/swagger-codegen-cli/$JarVersion/swagger-codegen-cli-$JarVersion.jar" -OutFile $jarPath
+            Invoke-WebRequest $url -OutFile $jarPath
         }
     }
 
@@ -110,27 +146,53 @@ try {
     # --model-name-prefix="pre" --model-name-suffix="suff"
     Remove-Item $OutputFolder/*.* -Force -Recurse
 
+    if ($Generator -eq "openapi" -and !$SkipConfig) {
+        @"
+{
+    "aspnetCoreVersion": "6.0",
+    "operationIsAsync" : true,
+    "nullableReferenceTypes" : true,
+    "useNewtonsoft": false,
+    "pocoModels": true,
+    "swashbuckleVersion": "6.4.0"
+}
+"@ | Out-File (Join-Path $PSScriptRoot "aspnetcore-config.json")
+        $params += "-c", "./aspnetcore-config.json"
+    }
+    Write-Verbose "Params: $($params -join ', ')"
+    if (!$ControllerNamespace) {
+        $ControllerNamespace = $Namespace+".Controllers"
+    }
+
     # added --add-opens to fix isEmpty accessible error as described here
     # https://github.com/swagger-api/swagger-codegen/issues/10966
+    java --add-opens=java.base/java.util=ALL-UNNAMED -jar $jarPath generate -i $OASFile -o $OutputFolder `
+            --api-package=$ControllerNamespace `
+            --model-package=$Namespace `
+            @params | Select-String -NotMatch "( INFO |^#)"
 
-    java --add-opens=java.base/java.util=ALL-UNNAMED -jar $jarPath generate -i $OASFile -o $OutputFolder -l aspnetcore --api-package="shoot.test.cond" --model-package=$Namespace
+    if ($Generator -eq "openapi" -and !$SkipConfig) {
+        Remove-Item (Join-Path $PSScriptRoot "aspnetcore-config.json") -Force -ErrorAction Ignore
+    }
 
     if ($LASTEXITCODE -eq 0) {
-        Get-ChildItem (Join-Path $OutputFolder "src/IO.Swagger/Models/*Inner.cs") | ForEach-Object {
-            Write-Warning "Found inner class $_. You may rework the model the OAS file to avoid that."
-        }
+        if (!$SkipPostProcessing) {
+            Get-ChildItem (Join-Path $OutputFolder "src/$srcFolder/Models/*Inner.cs") | ForEach-Object {
+                Write-Warning "Found inner class $_. You may rework the model the OAS file to avoid that."
+            }
 
-        Get-ChildItem (Join-Path $OutputFolder "src/IO.Swagger/Models" ) |
-                Select-Object -ExpandProperty fullname |
-                Format-Model -Namespace $Namespace -NoNullGuid:$NoNullGuid -RemoveEnumSuffix:$RemoveEnumSuffix -NoToString:$NoToString
+            Get-ChildItem (Join-Path $OutputFolder "src/$srcFolder/Models" ) |
+                    Select-Object -ExpandProperty fullname |
+                    Format-Model -Namespace $Namespace -NoNullGuid:$NoNullGuid -RemoveEnumSuffix:$RemoveEnumSuffix -NoToString:$NoToString -Generator $Generator
 
-        Get-ChildItem (Join-Path $OutputFolder "src/IO.Swagger/Controllers" ) |
-                Select-Object -ExpandProperty fullname |
-                Format-Controller -Namespace $Namespace -ControllerNamespace $ControllerNamespace -RenameController:$RenameController -NoValidateModel:$NoValidateModel
+            Get-ChildItem (Join-Path $OutputFolder "src/$srcFolder/Controllers" ) |
+                    Select-Object -ExpandProperty fullname |
+                    Format-Controller -Namespace $Namespace -ControllerNamespace $ControllerNamespace -RenameController:$RenameController -NoValidateModel:$NoValidateModel
 
-        if ($RenameController) {
-            Get-ChildItem (Join-Path $OutputFolder "src/IO.Swagger/Controllers" ) |
-                    ForEach-Object { Rename-Item $_ ($_.Name -replace 'Api', 'Controller') }
+            if ($RenameController) {
+                Get-ChildItem (Join-Path $OutputFolder "src/$srcFolder/Controllers" ) |
+                        ForEach-Object { Rename-Item $_ ($_.Name -replace 'Api', 'Controller') }
+                }
         }
     } else {
         Write-Warning "LastExitCode is $LASTEXITCODE"

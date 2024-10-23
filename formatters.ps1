@@ -30,7 +30,7 @@ function Format-Controller {
         Set-Content ((((((
                             $c.Replace("using $Namespace;", "using $Namespace;`nusing System.Threading.Tasks;")) `
                             -replace ' exampleJson = null;\s+', ' ') `
-                            -replace 'virtual IActionResult ', 'virtual async Task<IActionResult> ' ) `
+                            -replace 'virtual IActionResult ', 'async Task<IActionResult> ' ) `
                             -replace 'using IO\.Swagger.Security;\s*', '') `
                             -replace 'IO\.Swagger\.Controllers', $controllerNamespace ) `
                             -replace 'return new ObjectResult\(example\);', 'return await Task.FromResult(new ObjectResult(example)).ConfigureAwait(false);') `
@@ -47,7 +47,9 @@ function Format-Model {
         [string] $Namespace,
         [switch] $RemoveEnumSuffix,
         [switch] $NoNullGuid,
-        [switch] $NoToString
+        [switch] $NoToString,
+        [ValidateSet("swaggergen","openapi")]
+        [string] $Generator = "swaggergen"
     )
 
     process {
@@ -102,7 +104,8 @@ function Format-Model {
         }
         #  try remove trailing works in almost all cases $content = $content -replace "[\t ]+`n","`n"
 
-        Set-Content (
+        if ($Generator -eq "swaggergen") {
+             Set-Content (
             "#pragma warning disable CA1834 // Consider using 'StringBuilder.Append(char)' when applicable`n" +
             "#pragma warning disable CA1307 // Specify StringComparison`n" +
             "// ReSharper disable RedundantUsingDirective`n" +
@@ -120,5 +123,15 @@ function Format-Model {
             "`n#pragma warning restore CA1834 // Consider using 'StringBuilder.Append(char)' when applicable`n" +
             "#pragma warning disable CA1307 // Specify StringComparison`n" )`
             -Path $FileName -Encoding ascii -NoNewline
+        } else {
+            Set-Content (
+                ($(Repair-Null $content).
+                       Replace('using Org.OpenAPITools.Converters;','using System.Text.Json.Serialization;').
+                       Replace('return JsonConvert.SerializeObject(this, Formatting.Indented);', 'return JsonSerializer.Serialize(this, new JsonSerializerOptions() { WriteIndented = true });').
+                       Replace('namespace IO.Swagger.Models', "namespace $Namespace").
+                       Replace('[JsonConverter(typeof(Newtonsoft.Json.Converters.StringEnumConverter))]',''
+                     ) -replace "^/\*", "#nullable disable`n/*"))`
+               -Path $FileName -Encoding ascii -NoNewline
+        }
     }
 }
